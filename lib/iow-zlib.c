@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <blosc.h>
 
 /* Libwandio IO module implementing a zlib writer */
 
@@ -57,6 +58,12 @@ extern iow_source_t zlib_wsource;
 #define DATA(iow) ((struct zlibw_t *)((iow)->data))
 #define min(a,b) ((a)<(b) ? (a) : (b))
 
+
+//repu1sion -----
+#define NUM_THREADS 4
+#define COMPRESSOR "zlib"
+//---------------
+
 iow_t *zlib_wopen(iow_t *child, int compress_level)
 {
 	iow_t *iow;
@@ -65,6 +72,24 @@ iow_t *zlib_wopen(iow_t *child, int compress_level)
 	iow = malloc(sizeof(iow_t));
 	iow->source = &zlib_wsource;
 	iow->data = malloc(sizeof(struct zlibw_t));
+
+	//repu1sion -----
+	int rv = 0;
+	int num_threads = NUM_THREADS;
+
+        blosc_init();
+
+        blosc_set_nthreads(num_threads);
+        printf("Using %d threads \n", num_threads);
+
+        rv = blosc_set_compressor(COMPRESSOR);
+        if (rv < 0)
+        {
+                printf("Error setting compressor %s\n", COMPRESSOR);
+                return NULL;
+        }
+        printf("Using %s compressor\n", COMPRESSOR);
+	//---------------
 
 	DATA(iow)->child = child;
 
@@ -88,7 +113,6 @@ iow_t *zlib_wopen(iow_t *child, int compress_level)
 	return iow;
 }
 
-
 static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 {
 	if (DATA(iow)->err == ERR_EOF) {
@@ -98,13 +122,24 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 		return -1; /* ERROR! */
 	}
 
+
+	//repu1sion -----
+	int csize;
+	char *dta = buffer;
+	int isize = (int)len;
+	csize = blosc_compress(9, 1, sizeof(char), isize, dta, data_out, osize);
+	
+
+
+	//---------------
+
 	DATA(iow)->strm.next_in = (Bytef*)buffer; /* This casts away const, but it's really const 
 						   * anyway 
 						   */
 	DATA(iow)->strm.avail_in = len;
 
 	while (DATA(iow)->err == ERR_OK && DATA(iow)->strm.avail_in > 0) {
-		while (DATA(iow)->strm.avail_out <= 0) {
+		while (DATA(iow)->strm.avail_out <= 0) {			//when its nill we need to write to file and get new buffer
 			int bytes_written = wandio_wwrite(DATA(iow)->child, 
 				(char *)DATA(iow)->outbuff,
 				sizeof(DATA(iow)->outbuff));
@@ -120,6 +155,8 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 			DATA(iow)->strm.next_out = DATA(iow)->outbuff;
 			DATA(iow)->strm.avail_out = sizeof(DATA(iow)->outbuff);
 		}
+
+
 		/* Decompress some data into the output buffer */
 		int err=deflate(&DATA(iow)->strm, 0);
 		switch(err) {
@@ -162,6 +199,11 @@ static void zlib_wclose(iow_t *iow)
 	wandio_wdestroy(DATA(iow)->child);
 	free(iow->data);
 	free(iow);
+
+
+	//repu1sion -----
+	blosc_destroy();
+	//---------------
 }
 
 iow_source_t zlib_wsource = {
