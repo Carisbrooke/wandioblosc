@@ -36,6 +36,12 @@
 #include <assert.h>
 #include <blosc.h>
 
+//repu1sion -----
+#define NUM_THREADS 4
+#define COMPRESSOR "zlib"
+#define BUF_OUT_SIZE 1024*1024
+//---------------
+
 /* Libwandio IO module implementing a zlib writer */
 
 enum err_t {
@@ -46,7 +52,7 @@ enum err_t {
 
 struct zlibw_t {
 	z_stream strm;
-	Bytef outbuff[1024*1024];
+	Bytef outbuff[BUF_OUT_SIZE];
 	iow_t *child;
 	enum err_t err;
 	int inoffset;
@@ -59,10 +65,7 @@ extern iow_source_t zlib_wsource;
 #define min(a,b) ((a)<(b) ? (a) : (b))
 
 
-//repu1sion -----
-#define NUM_THREADS 4
-#define COMPRESSOR "zlib"
-//---------------
+
 
 iow_t *zlib_wopen(iow_t *child, int compress_level)
 {
@@ -127,36 +130,38 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 	int csize;
 	char *dta = buffer;
 	int isize = (int)len;
-	csize = blosc_compress(9, 1, sizeof(char), isize, dta, data_out, osize);
+	int osize = BUF_OUT_SIZE;
 	
-
-
 	//---------------
-
-	DATA(iow)->strm.next_in = (Bytef*)buffer; /* This casts away const, but it's really const 
-						   * anyway 
-						   */
+	DATA(iow)->strm.next_in = (Bytef*)buffer;  
 	DATA(iow)->strm.avail_in = len;
 
-	while (DATA(iow)->err == ERR_OK && DATA(iow)->strm.avail_in > 0) {
-		while (DATA(iow)->strm.avail_out <= 0) {			//when its nill we need to write to file and get new buffer
-			int bytes_written = wandio_wwrite(DATA(iow)->child, 
-				(char *)DATA(iow)->outbuff,
-				sizeof(DATA(iow)->outbuff));
-			if (bytes_written <= 0) { /* Error */
+	while (DATA(iow)->err == ERR_OK && DATA(iow)->strm.avail_in > 0) 
+	{	//repu1sion: when buffer is full we write it to file and set next_out, avail_out again
+		while (DATA(iow)->strm.avail_out <= 0) 
+		{
+			int bytes_written = wandio_wwrite(DATA(iow)->child, (char *)DATA(iow)->outbuff, sizeof(DATA(iow)->outbuff));
+			if (bytes_written <= 0) 
+			{	//error
 				DATA(iow)->err = ERR_ERROR;
 				/* Return how much data we managed to write ok */
-				if (DATA(iow)->strm.avail_in != (uint32_t)len) {
+				if (DATA(iow)->strm.avail_in != (uint32_t)len)
 					return len-DATA(iow)->strm.avail_in;
-				}
 				/* Now return error */
 				return -1;
 			}
 			DATA(iow)->strm.next_out = DATA(iow)->outbuff;
 			DATA(iow)->strm.avail_out = sizeof(DATA(iow)->outbuff);
 		}
-
-
+		//repu1sion: do the blosc compression on buffer
+		csize = blosc_compress(9, 1, sizeof(char), isize, dta, data_out, osize);
+		printf("input data size: %d , compressed data size: %d \n", isize, csize);
+		//repu1sion: manage all avail_in, avail_out, next_out vars.
+		DATA(iow)->strm.avail_in -= isize;	//repu1sion: it should be 0, anyway
+		DATA(iow)->strm.avail_out -= csize;	//repu1sion: decrease available space in output buffer
+		DATA(iow)->strm.next_out += csize;	//repu1sion: move pointer forward
+		
+#if 0
 		/* Decompress some data into the output buffer */
 		int err=deflate(&DATA(iow)->strm, 0);
 		switch(err) {
@@ -166,16 +171,19 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 			default:
 				DATA(iow)->err = ERR_ERROR;
 		}
+#endif
 	}
-	/* Return the number of bytes decompressed */
-	return len-DATA(iow)->strm.avail_in;
+	/* Return the number of bytes compressed */
+	return len-DATA(iow)->strm.avail_in;	//repulsion: len - 0 = len, so we mostly return len here
 }
 
+//XXX - replace deflate() here too
 static void zlib_wclose(iow_t *iow)
 {
 	int res;
 	
 	while (1) {
+		//XXX - replace it
 		res = deflate(&DATA(iow)->strm, Z_FINISH);
 
 		if (res == Z_STREAM_END)
