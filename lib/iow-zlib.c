@@ -125,10 +125,9 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 		return -1; /* ERROR! */
 	}
 
-
 	//repu1sion -----
 	int csize;
-	char *dta = buffer;
+	const char *dta = buffer;
 	int isize = (int)len;
 	int osize = BUF_OUT_SIZE;
 	
@@ -154,7 +153,7 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 			DATA(iow)->strm.avail_out = sizeof(DATA(iow)->outbuff);
 		}
 		//repu1sion: do the blosc compression on buffer
-		csize = blosc_compress(9, 1, sizeof(char), isize, dta, data_out, osize);
+		csize = blosc_compress(9, 1, sizeof(char), isize, dta, DATA(iow)->strm.next_out, osize);
 		printf("input data size: %d , compressed data size: %d \n", isize, csize);
 		//repu1sion: manage all avail_in, avail_out, next_out vars.
 		DATA(iow)->strm.avail_in -= isize;	//repu1sion: it should be 0, anyway
