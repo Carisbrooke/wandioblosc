@@ -65,7 +65,8 @@ extern iow_source_t zlib_wsource;
 #define min(a,b) ((a)<(b) ? (a) : (b))
 
 
-
+//gz header
+gz_header gzheader;
 
 iow_t *zlib_wopen(iow_t *child, int compress_level)
 {
@@ -112,6 +113,20 @@ iow_t *zlib_wopen(iow_t *child, int compress_level)
 			9,		/* Use maximum (fastest) amount of memory usage */
 			Z_DEFAULT_STRATEGY
 		);
+
+	gzheader.text = 0;
+	gzheader.time = 0;
+	gzheader.os = 3;
+	gzheader.hcrc = 0;
+	//XXX - name?
+
+	//deflateSetHeader(z_streamp strm, gz_headerp head);
+	printf("setting gzip header\n");
+	rv = deflateSetHeader(&DATA(iow)->strm, &gzheader);
+	if (rv)
+		printf("failed to set header. rv: %d \n", rv);
+	else
+		printf("header set successfully\n");
 
 	return iow;
 }
