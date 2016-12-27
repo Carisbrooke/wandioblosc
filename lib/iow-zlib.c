@@ -68,6 +68,61 @@ extern iow_source_t zlib_wsource;
 //gz header
 gz_header gzheader;
 
+
+/*
+    GZIP FILE FORMAT
+    -------------------
+    - a 10-byte header, containing a magic number (1f 8b), a version number and a timestamp
+    - optional extra headers, such as the original file name,
+    - a body, containing a DEFLATE-compressed payload
+    - an 8-byte footer, containing a CRC-32 checksum and the length of the original uncompressed data, modulo 2^32.[2]
+
+    /mnt/raw/gdwk/libtrace$ hexdump -C real.gz 
+    00000000  1f 8b 08 00 00 00 00 00  04 03 b5 53 cf 6b 13 41  |...........S.k.A|
+    00000010  14 7e b3 6e ac ad 49 69  b5 44 41 2b d6 88 d6 83  |.~.n..Ii.DA+....|
+*/
+
+static unsigned long write_gzip_header(iow_t *child, int compression)
+{
+	unsigned long len = 0;		//header could have different length (10 bytes if no extra)
+	unsigned char head[30] = {0};
+	int bytes_written = 0;
+
+	//forming 10 bytes gzip header
+        head[0] = 31;			//magic number 0x1f 0x8b (2 bytes)
+        head[1] = 139;
+        head[2] = 8;                	/* deflate */
+	head[3] = 0;			//don't keep filename in gzip header
+	head[4] = 0; head[5] = 0; head[6] = 0; head[7] = 0;	//timestamp (4 bytes)
+//        head[3] = g.name != NULL ? 8 : 0;
+//        PUT4L(head + 4, g.mtime);	//timestamp (4 bytes)
+        head[8] = compression >= 9 ? 2 : (compression == 1 ? 4 : 0);
+        head[9] = 3;                	/* unix os */
+//        writen(g.outd, head, 10);
+        len = 10;
+
+//let's omit filename stored in header now
+/*
+        if (g.name != NULL)
+            writen(g.outd, (unsigned char *)g.name, strlen(g.name) + 1);
+        if (g.name != NULL)
+            len += strlen(g.name) + 1;
+*/
+
+	//writing header to file
+	bytes_written = wandio_wwrite(child, head, len);
+	printf("[wandio] %s() writing header\n", __func__);
+	if (bytes_written <= 0) 
+	{
+		len = 0;
+		printf("[wandio] %s() ERROR writing header!\n", __func__);
+	}
+	else
+		printf("[wandio] %s() %lu bytes of header wrote to file successfully\n", __func__, len);
+
+	return len;
+}
+
 iow_t *zlib_wopen(iow_t *child, int compress_level)
 {
 	iow_t *iow;
@@ -79,6 +134,7 @@ iow_t *zlib_wopen(iow_t *child, int compress_level)
 
 	//repu1sion -----
 	int rv = 0;
+	int len = 0;
 	int num_threads = NUM_THREADS;
 
         blosc_init();
@@ -114,6 +170,16 @@ iow_t *zlib_wopen(iow_t *child, int compress_level)
 			Z_DEFAULT_STRATEGY
 		);
 
+	//writing header
+	len = write_gzip_header(DATA(iow)->child, compress_level);
+	if (!len)
+		return NULL;
+
+
+
+
+
+#if 0
 	gzheader.text = 0;
 	gzheader.time = 0;
 	gzheader.os = 3;
@@ -127,6 +193,7 @@ iow_t *zlib_wopen(iow_t *child, int compress_level)
 		printf("failed to set header. rv: %d \n", rv);
 	else
 		printf("header set successfully\n");
+#endif
 
 	return iow;
 }
