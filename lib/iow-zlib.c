@@ -56,18 +56,24 @@ struct zlibw_t {
 	iow_t *child;
 	enum err_t err;
 	int inoffset;
+	//repu1sion: extending struct
+	unsigned long check; //var for storing and recalculating crc32 for gzip footer
+	unsigned long ulen;  //uncompressed data length
+	int compression;
 };
-
 
 extern iow_source_t zlib_wsource; 
 
 #define DATA(iow) ((struct zlibw_t *)((iow)->data))
 #define min(a,b) ((a)<(b) ? (a) : (b))
 
+//repu1sion: macroses from pigz code
+/* put a 4-byte integer into a byte array in LSB order or MSB order */
+#define PUT2L(a,b) (*(a)=(b)&0xff,(a)[1]=(b)>>8)
+#define PUT4L(a,b) (PUT2L(a,(b)&0xffff),PUT2L((a)+2,(b)>>16))
 
 //gz header
-gz_header gzheader;
-
+//gz_header gzheader;
 
 /*
     GZIP FILE FORMAT
@@ -123,6 +129,33 @@ static unsigned long write_gzip_header(iow_t *child, int compression)
 	return len;
 }
 
+//4 bytes CRC32 value of original uncompressed data , 4 bytes of uncompressed length
+//@check - crc32 of uncompressed data
+//@ulen - length of uncompressed data
+static unsigned long write_gzip_footer(iow_t *child, unsigned long l_check, unsigned long l_ulen)
+{
+	unsigned long len = 8;
+	unsigned char tail[8] = {0}; //for gzip have a fixed 8 bytes of footer
+	int bytes_written = 0;
+
+        PUT4L(tail, l_check);
+        PUT4L(tail + 4, l_ulen);
+
+	//writing header to file
+	bytes_written = wandio_wwrite(child, tail, len);
+	printf("[wandio] %s() writing footer with crc: 0x%lx and length: %lu\n", __func__, l_check, l_ulen);
+	if (bytes_written <= 0) 
+	{
+		len = 0;
+		printf("[wandio] %s() ERROR writing footer!\n", __func__);
+	}
+	else
+		printf("[wandio] %s() %lu bytes of header wrote to file successfully\n", __func__, len);
+
+	return len;
+}
+
+
 iow_t *zlib_wopen(iow_t *child, int compress_level)
 {
 	iow_t *iow;
@@ -161,6 +194,8 @@ iow_t *zlib_wopen(iow_t *child, int compress_level)
 	DATA(iow)->strm.zfree = Z_NULL;
 	DATA(iow)->strm.opaque = NULL;
 	DATA(iow)->err = ERR_OK;
+	//repu1sion:store compression
+	DATA(iow)->compression = compress_level;
 
 	deflateInit2(&DATA(iow)->strm, 
 			compress_level,	/* Level */
@@ -174,10 +209,6 @@ iow_t *zlib_wopen(iow_t *child, int compress_level)
 	len = write_gzip_header(DATA(iow)->child, compress_level);
 	if (!len)
 		return NULL;
-
-
-
-
 
 #if 0
 	gzheader.text = 0;
@@ -207,11 +238,22 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 		return -1; /* ERROR! */
 	}
 
+	printf("[wandio] %s() ENTER. buf: %p , len: %ld \n", __func__, buffer, len);
+
 	//repu1sion -----
 	int csize;
 	const char *dta = buffer;
 	int isize = (int)len;
 	int osize = BUF_OUT_SIZE;
+
+	//somehow occasionally we have zlib_wwrite() call with 0 len
+	if (len)
+	{
+		//crc
+		DATA(iow)->check = crc32(0L, Z_NULL, 0);
+		//uncompressed length
+		DATA(iow)->ulen = 0;
+	}
 	
 	//---------------
 	DATA(iow)->strm.next_in = (Bytef*)buffer;  
@@ -233,13 +275,17 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 			DATA(iow)->strm.next_out = DATA(iow)->outbuff;
 			DATA(iow)->strm.avail_out = sizeof(DATA(iow)->outbuff);
 		}
+		//update crc on uncompressed data
+		DATA(iow)->check = crc32(DATA(iow)->check, DATA(iow)->strm.next_in, DATA(iow)->strm.avail_in);
 		//repu1sion: do the blosc compression on buffer
-		csize = blosc_compress(9, 1, sizeof(char), isize, dta, DATA(iow)->strm.next_out, osize);
+		csize = blosc_compress(DATA(iow)->compression, 1, sizeof(char), isize, dta, DATA(iow)->strm.next_out, osize);
 		printf("[wandio] %s() input data size: %d , compressed data size: %d \n", __func__, isize, csize);
 		//repu1sion: manage all avail_in, avail_out, next_out vars.
 		DATA(iow)->strm.avail_in -= isize;	//repu1sion: it should be 0, anyway
 		DATA(iow)->strm.avail_out -= csize;	//repu1sion: decrease available space in output buffer
 		DATA(iow)->strm.next_out += csize;	//repu1sion: move pointer forward
+		DATA(iow)->ulen += isize;
+		printf("[wandio] %s() crc : %lx , uncompressed data size: %ld \n", __func__, DATA(iow)->check, DATA(iow)->ulen);
 		
 #if 0
 		/* Decompress some data into the output buffer */
@@ -287,6 +333,10 @@ static void zlib_wclose(iow_t *iow)
 	deflateEnd(&DATA(iow)->strm);
 	wandio_wwrite(DATA(iow)->child, (char *)DATA(iow)->outbuff, sizeof(DATA(iow)->outbuff) - DATA(iow)->strm.avail_out);
 	printf("[wandio] %s() writing buffer with size: %lu \n", __func__, sizeof(DATA(iow)->outbuff) - DATA(iow)->strm.avail_out);
+
+	//write footer
+	write_gzip_footer(DATA(iow)->child, DATA(iow)->check, DATA(iow)->ulen);
+
 	wandio_wdestroy(DATA(iow)->child);
 	free(iow->data);
 	free(iow);
