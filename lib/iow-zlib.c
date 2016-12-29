@@ -40,6 +40,7 @@
 #define NUM_THREADS 4
 #define COMPRESSOR "zlib"
 #define BUF_OUT_SIZE 1024*1024
+#define FREE_SPACE_LIMIT 100*1024 	//if we have less free space in buffer than 100Kb - dump it
 //---------------
 
 /* Libwandio IO module implementing a zlib writer */
@@ -261,7 +262,7 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 
 	while (DATA(iow)->err == ERR_OK && DATA(iow)->strm.avail_in > 0) 
 	{	//repu1sion: when buffer is full we write it to file and set next_out, avail_out again
-		while (DATA(iow)->strm.avail_out <= 51200)
+		while (DATA(iow)->strm.avail_out <= FREE_SPACE_LIMIT)
 		{
 			int bytes_written = wandio_wwrite(DATA(iow)->child, (char *)DATA(iow)->outbuff, sizeof(DATA(iow)->outbuff));
 			printf("[wandio] %s() writing full 1Mb buffer \n", __func__);
@@ -280,6 +281,13 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 		//repu1sion: do the blosc compression on buffer
 		csize = blosc_compress(DATA(iow)->compression, 0, sizeof(char), isize, dta, DATA(iow)->strm.next_out, osize);
 		//repu1sion: manage all avail_in, avail_out, next_out vars.
+		if ((unsigned int)csize > DATA(iow)->strm.avail_out)
+		{
+			printf("[wandio] <error> overflow! compressed data size: %d , space in buffer: %u \n",
+				csize, DATA(iow)->strm.avail_out);
+			DATA(iow)->err = ERR_ERROR;
+			return -1;
+		}
 		DATA(iow)->strm.avail_in -= isize;	//repu1sion: it should be 0, anyway
 		DATA(iow)->strm.avail_out -= csize;	//repu1sion: decrease available space in output buffer
 		DATA(iow)->strm.next_out += csize;	//repu1sion: move pointer forward
