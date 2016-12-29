@@ -261,7 +261,7 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 
 	while (DATA(iow)->err == ERR_OK && DATA(iow)->strm.avail_in > 0) 
 	{	//repu1sion: when buffer is full we write it to file and set next_out, avail_out again
-		while (DATA(iow)->strm.avail_out <= 0) 
+		while (DATA(iow)->strm.avail_out <= 51200)
 		{
 			int bytes_written = wandio_wwrite(DATA(iow)->child, (char *)DATA(iow)->outbuff, sizeof(DATA(iow)->outbuff));
 			printf("[wandio] %s() writing full 1Mb buffer \n", __func__);
@@ -278,14 +278,15 @@ static int64_t zlib_wwrite(iow_t *iow, const char *buffer, int64_t len)
 		//update crc on uncompressed data
 		DATA(iow)->check = crc32(DATA(iow)->check, DATA(iow)->strm.next_in, DATA(iow)->strm.avail_in);
 		//repu1sion: do the blosc compression on buffer
-		csize = blosc_compress(DATA(iow)->compression, 1, sizeof(char), isize, dta, DATA(iow)->strm.next_out, osize);
-		printf("[wandio] %s() input data size: %d , compressed data size: %d \n", __func__, isize, csize);
+		csize = blosc_compress(DATA(iow)->compression, 0, sizeof(char), isize, dta, DATA(iow)->strm.next_out, osize);
 		//repu1sion: manage all avail_in, avail_out, next_out vars.
 		DATA(iow)->strm.avail_in -= isize;	//repu1sion: it should be 0, anyway
 		DATA(iow)->strm.avail_out -= csize;	//repu1sion: decrease available space in output buffer
 		DATA(iow)->strm.next_out += csize;	//repu1sion: move pointer forward
 		DATA(iow)->ulen += isize;
-		printf("[wandio] %s() crc : %lx , uncompressed data size: %ld \n", __func__, DATA(iow)->check, DATA(iow)->ulen);
+		printf("[wandio] %s() input data size: %d , compressed data size: %d , space in buffer: %u \n",
+			 __func__, isize, csize, DATA(iow)->strm.avail_out);
+		printf("[wandio] %s() crc : %lx , uncompressed data size: %lu \n", __func__, DATA(iow)->check, DATA(iow)->ulen);
 		
 #if 0
 		/* Decompress some data into the output buffer */
